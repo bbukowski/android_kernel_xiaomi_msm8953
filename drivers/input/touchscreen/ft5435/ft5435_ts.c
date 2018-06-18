@@ -60,7 +60,7 @@ static unsigned char firmware_data_vendor2[] = {
 	#include "HQ_AL1512_C6_FT5435_Ofilm0x51_Ver0a_20170119_app.i"
 };
 #endif
-#define TCT_KEY_BACK  158
+#define TCT_KEY_BACK 158
 #define TCT_KEY_HOME 172
 #define TCT_KEY_MENU 139
 
@@ -325,6 +325,7 @@ u8 vr_on;
 #endif
 };
 static bool disable_keys_function = false;
+static bool swap_keys_function = false;
 bool is_ft5435 = false;
 struct wake_lock ft5436_wakelock;
 
@@ -1074,6 +1075,18 @@ static int ft_tp_interrupt(struct ft5435_ts_data *data)
 	return rc;
 }
 #endif
+
+static void ft5435_report_key(struct input_dev *dev, unsigned int code, bool value) {
+	if(swap_keys_function) {
+		if (code == TCT_KEY_BACK)
+			code = TCT_KEY_MENU;
+		else if (code == TCT_KEY_MENU)
+			code = TCT_KEY_BACK;
+	}
+
+	input_report_key(dev, code, value);
+}
+
 static irqreturn_t ft5435_ts_interrupt(int irq, void *dev_id)
 {
 #if 1
@@ -1176,9 +1189,9 @@ static irqreturn_t ft5435_ts_interrupt(int irq, void *dev_id)
 				for (j = 0; j < data->pdata->num_virkey; j++) {
 					if (x == data->pdata->vkeys[j].x) {
 						if (status == FT_TOUCH_DOWN || status == FT_TOUCH_CONTACT)
-							input_report_key(data->input_dev, data->pdata->vkeys[j].keycode, true);
+							ft5435_report_key(data->input_dev, data->pdata->vkeys[j].keycode, true);
 						else {
-							input_report_key(data->input_dev, data->pdata->vkeys[j].keycode, false);
+							ft5435_report_key(data->input_dev, data->pdata->vkeys[j].keycode, false);
 						}
 					}
 				}
@@ -3689,13 +3702,38 @@ static ssize_t ft5435_ts_enable_dt2w_store(struct device *dev,
         }
 }
 
-
 static DEVICE_ATTR(enable_dt2w, S_IWUSR | S_IRUSR, ft5435_ts_enable_dt2w_show,
                    ft5435_ts_enable_dt2w_store);
+
+
+static ssize_t ft5435_ts_swap_keys_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+        const char c = swap_keys_function ? '1' : '0';
+        return sprintf(buf, "%c\n", c);
+}
+
+static ssize_t ft5435_ts_swap_keys_store(struct device *dev,
+        struct device_attribute *attr, const char *buf, size_t count)
+{
+        int i;
+
+        if (sscanf(buf, "%u", &i) == 1 && i < 2) {
+                swap_keys_function = (i == 1);
+                return count;
+        } else {
+                dev_dbg(dev, "swap_keys write error\n");
+                return -EINVAL;
+        }
+}
+
+static DEVICE_ATTR(swap_keys, S_IWUSR | S_IRUSR, ft5435_ts_swap_keys_show,
+                   ft5435_ts_swap_keys_store);
 
 static struct attribute *ft5435_ts_attrs[] = {
     &dev_attr_disable_keys.attr,
     &dev_attr_enable_dt2w.attr,
+    &dev_attr_swap_keys.attr,
 	NULL
 };
 
@@ -3708,7 +3746,7 @@ static int ft5435_proc_init(struct kernfs_node *sysfs_node_parent)
 {
        int ret = 0;
        char *buf, *path = NULL;
-       char *key_disabler_sysfs_node, *double_tap_sysfs_node;
+       char *key_disabler_sysfs_node, *double_tap_sysfs_node, *key_swap_sysfs_node;
        struct proc_dir_entry *proc_entry_tp = NULL;
        struct proc_dir_entry *proc_symlink_tmp = NULL;
        buf = kzalloc(PATH_MAX, GFP_KERNEL);
@@ -3741,9 +3779,20 @@ static int ft5435_proc_init(struct kernfs_node *sysfs_node_parent)
                pr_err("%s: Couldn't create double_tap_enable symlink\n", __func__);
        }
 
+       key_swap_sysfs_node = kzalloc(PATH_MAX, GFP_KERNEL);
+       if (key_swap_sysfs_node)
+               sprintf(key_swap_sysfs_node, "/sys%s/%s", path, "swap_keys");
+       proc_symlink_tmp = proc_symlink("swap_keys",
+                       proc_entry_tp, key_swap_sysfs_node);
+       if (proc_symlink_tmp == NULL) {
+               pr_err("%s: Couldn't create swap_keys symlink\n", __func__);
+               ret = -ENOMEM;
+       }
+
        kfree(buf);
        kfree(key_disabler_sysfs_node);
        kfree(double_tap_sysfs_node);
+       kfree(key_swap_sysfs_node);
        return ret;
 }
 
